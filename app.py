@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 
 # Set the page title
-st.title("AI-Powered Redirect Mapping Tool - Version 4.0")
+st.title("AI-Powered Redirect Mapping Tool - Version 5.0")
 
 st.markdown("""
 
@@ -160,8 +160,9 @@ if uploaded_origin and uploaded_destination:
                 if keyword_normalized in origin_url_normalized:
                     destination_patterns = rule['Destination URL Pattern'].split('|')
                     for pattern in destination_patterns:
-                        if pattern.strip() in destination_df['Address'].values:
-                            return pattern.strip()
+                        cleaned_pattern = pattern.strip()
+                        if cleaned_pattern in destination_df['Address'].values:
+                            return cleaned_pattern
             
             return fallback_url
         
