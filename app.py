@@ -6,7 +6,6 @@ import faiss
 import os
 import re
 from difflib import SequenceMatcher
-from concurrent.futures import ThreadPoolExecutor
 import time
 
 # Set the page title
@@ -28,6 +27,12 @@ This tool automates redirect mappings during site migrations by matching URLs fr
 4. Click **"Let's Go!"** to initiate the matching process.
 5. Download the resulting `output.csv` file containing matched URLs with similarity scores or fallback rules.
 """)
+
+# Step 0: Authentication
+password = st.text_input("Enter Password to Access the Tool:", type="password")
+if password != "@SEOvaga!!!":
+    st.warning("Please enter the correct password to proceed.")
+    st.stop()
 
 # Step 1: Upload Files
 st.header("Upload Your Files")
@@ -91,18 +96,18 @@ if uploaded_origin and uploaded_destination:
             highest_score = 0
             best_match = '/'
             for destination_url in destination_df['Address']:
-                if not isinstance(origin_url, str) or not isinstance(destination_url, str):
-                    continue
-                score = SequenceMatcher(None, origin_url.lower(), destination_url.lower()).ratio() * 100
-                if score > highest_score:
-                    highest_score = score
-                    best_match = destination_url
+                if isinstance(origin_url, str) and isinstance(destination_url, str):
+                    score = SequenceMatcher(None, origin_url.lower(), destination_url.lower()).ratio() * 100
+                    if score > highest_score:
+                        highest_score = score
+                        best_match = destination_url
             return best_match if highest_score > partial_match_threshold else '/'
 
         if prioritize_partial_match:
-            # Use ThreadPoolExecutor for parallel processing of partial matches
-            with ThreadPoolExecutor() as executor:
-                partial_matches = list(executor.map(get_partial_match_url, origin_df['Address']))
+            # Process partial matches without threading
+            partial_matches = []
+            for origin_url in origin_df['Address']:
+                partial_matches.append(get_partial_match_url(origin_url))
 
             # Apply partial matches before calculating similarity scores
             matches_df = pd.DataFrame({
@@ -151,13 +156,13 @@ if uploaded_origin and uploaded_destination:
 
         def get_fallback_url(origin_url):
             fallback_url = "/"  # Default fallback to homepage
-            origin_url_normalized = origin_url.lower().strip().rstrip('/')
+            origin_url_normalized = origin_url.lower().strip().rstrip('/') if isinstance(origin_url, str) else ''
             
             # Apply CSV rules
             applicable_rules = rules_df.sort_values(by='Priority')  # Sort rules by priority
             for _, rule in applicable_rules.iterrows():
                 keyword_normalized = rule['Keyword'].lower().strip().rstrip('/')
-                if keyword_normalized in origin_url_normalized:
+                if re.search(re.escape(keyword_normalized), origin_url_normalized):  # Flexible matching
                     destination_patterns = rule['Destination URL Pattern'].split('|')
                     for pattern in destination_patterns:
                         cleaned_pattern = pattern.strip()
@@ -187,6 +192,6 @@ if uploaded_origin and uploaded_destination:
         st.download_button(
             label="Download Results as CSV",
             data=matches_df.to_csv(index=False),
-            file_name="redirect_mapping_output_v4.csv",
+            file_name="redirect_mapping_output_v5.csv",
             mime="text/csv",
         )
