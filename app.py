@@ -90,8 +90,10 @@ if origin_file and dest_file:
 
         def partial_match(origin):
             best_score, best_url = 0, '/'
+            origin_str = str(origin).lower()
             for dest in dest_df['Address']:
-                score = SequenceMatcher(None, origin.lower(), dest.lower()).ratio() * 100
+                dest_str = str(dest).lower()
+                score = SequenceMatcher(None, origin_str, dest_str).ratio() * 100
                 if score > best_score:
                     best_score, best_url = score, dest
             return best_url if best_score > partial_thresh else '/'
