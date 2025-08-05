@@ -1,3 +1,4 @@
+# Refactored AI-Powered Redirect Mapping Tool for Custom GPT
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,190 +9,147 @@ import re
 from difflib import SequenceMatcher
 import time
 
-# Set the page title
-st.title("AI-Powered Redirect Mapping Tool - Version 5.0")
+# ------------------------
+# UI CONFIGURATION
+# ------------------------
+st.set_page_config(page_title="AI-Powered Redirect Mapping Tool v5.1", layout="wide")
+st.title("⚡ AI-Powered Redirect Mapping Tool - Refactored v5.1")
 
 st.markdown("""
+**Relevancy Script** by Daniel Emery  
+**Tool Dev & Refactor** by NDA
 
-Relevancy Script made by Daniel Emery
+### 🔧 What It Does
+Matches URLs from an origin site to a destination site during migrations using:
+- Partial URL similarity
+- Sentence-level semantic matching (via Sentence Transformers)
+- Rule-based fallbacks (from `rules.csv`)
 
-Everything else by: NDA
-
-⚡ **What It Is:**  
-This tool automates redirect mappings during site migrations by matching URLs from an old site to a new site based on content similarity and custom fallback rules for unmatched URLs.
-
-⚡ **How to Use It:**  
-1. Upload `origin.csv` and `destination.csv` files. Ensure that your files have the following headers: Address,Title 1,Meta Description 1,H1-1.
-2. Ensure that you remove any duplicates, and the http status of all URLs is 200. For best results, use relative URLs.
-3. Customize the settings below to fit your use case.
-4. Click **"Let's Go!"** to initiate the matching process.
-5. Download the resulting `output.csv` file containing matched URLs with similarity scores or fallback rules.
+### 🚀 How to Use
+1. Upload your `origin.csv` and `destination.csv`. Ensure columns: Address, Title 1, Meta Description 1, H1-1
+2. Files should contain **relative URLs only**, with status 200
+3. Adjust matching thresholds
+4. Hit **"Let's Go!"**
+5. Download the result
 """)
 
-# Step 0: Authentication
-password = st.text_input("Enter Password to Access the Tool:", type="password")
-if password != "@SEOvaga!!!":
+# ------------------------
+# AUTHENTICATION
+# ------------------------
+if st.text_input("Enter Password to Access the Tool:", type="password") != "@SEOvaga!!!":
     st.warning("Please enter the correct password to proceed.")
     st.stop()
 
-# Step 1: Upload Files
-st.header("Upload Your Files")
-uploaded_origin = st.file_uploader("Upload origin.csv", type="csv")
-uploaded_destination = st.file_uploader("Upload destination.csv", type="csv")
+# ------------------------
+# FILE UPLOAD
+# ------------------------
+st.header("Step 1: Upload Files")
+origin_file = st.file_uploader("Upload origin.csv", type="csv")
+dest_file = st.file_uploader("Upload destination.csv", type="csv")
 
-# Load rules.csv from the backend
-rules_path = 'rules.csv'  # Path to the rules CSV on the backend
-if os.path.exists(rules_path):
-    rules_df = pd.read_csv(rules_path, encoding="ISO-8859-1")
-else:
-    st.error("Rules file not found on the backend.")
+rules_path = 'rules.csv'
+if not os.path.exists(rules_path):
+    st.error("Rules file (rules.csv) not found in the backend.")
     st.stop()
 
-if uploaded_origin and uploaded_destination:
+rules_df = pd.read_csv(rules_path, encoding="ISO-8859-1").sort_values(by='Priority')
+
+# ------------------------
+# LOAD & CLEAN DATA
+# ------------------------
+def clean_and_prepare(df):
+    df.columns = df.columns.str.replace('ï»¿', '').str.strip()
+    if 'Address' not in df.columns:
+        df.rename(columns={df.columns[0]: 'Address'}, inplace=True)
+    df['combined_text'] = df.fillna('').apply(lambda x: ' '.join(x.astype(str)), axis=1)
+    return df
+
+if origin_file and dest_file:
     st.success("Files uploaded successfully!")
-    
-    # Step 2: Load Data with Encoding Handling
     try:
-        origin_df = pd.read_csv(uploaded_origin, encoding="ISO-8859-1")
-        destination_df = pd.read_csv(uploaded_destination, encoding="ISO-8859-1")
+        origin_df = clean_and_prepare(pd.read_csv(origin_file, encoding="ISO-8859-1"))
+        dest_df = clean_and_prepare(pd.read_csv(dest_file, encoding="ISO-8859-1"))
     except UnicodeDecodeError:
-        st.error("Error reading CSV files. Please ensure they are saved in a supported encoding (UTF-8 or ISO-8859-1).")
+        st.error("File encoding error. Use UTF-8 or ISO-8859-1.")
         st.stop()
 
-    # Remove BOM and strip whitespace from column names
-    origin_df.columns = origin_df.columns.str.replace('ï»¿', '').str.strip()
-    destination_df.columns = destination_df.columns.str.replace('ï»¿', '').str.strip()
+    # ------------------------
+    # USER SETTINGS
+    # ------------------------
+    st.header("Step 2: Customize Settings")
+    strategy = st.radio("Primary Matching Strategy", ("Partial Match", "Similarity Score"))
+    partial_thresh = st.slider("Partial Match Threshold (%)", 50, 100, 65, 5)
+    sim_thresh = st.slider("Similarity Score Threshold (%)", 50, 100, 60, 5)
 
-    # Check for required columns (use the first column if "Address" is not found)
-    if 'Address' not in origin_df.columns:
-        origin_df.rename(columns={origin_df.columns[0]: 'Address'}, inplace=True)
-    if 'Address' not in destination_df.columns:
-        destination_df.rename(columns={destination_df.columns[0]: 'Address'}, inplace=True)
-
-    # Combine all columns for similarity matching
-    origin_df['combined_text'] = origin_df.fillna('').apply(lambda x: ' '.join(x.astype(str)), axis=1)
-    destination_df['combined_text'] = destination_df.fillna('').apply(lambda x: ' '.join(x.astype(str)), axis=1)
-
-    # Step 3: User Customization Settings
-    st.header("Settings")
-    prioritize_partial_match_toggle = st.radio(
-        "Prioritize Matching Method:",
-        ("Partial Match", "Similarity Score"),
-        index=0,
-        help="Choose whether to prioritize partial matches (suitable for sites with meaningful URLs) or similarity scores (suitable for sites with optimized titles, descriptions, and headlines)."
-    )
-
-    prioritize_partial_match = prioritize_partial_match_toggle == "Partial Match"
-    partial_match_threshold = st.slider("Partial Match Threshold (in %)", min_value=50, max_value=100, value=65, step=5)
-    similarity_score_threshold = st.slider("Similarity Score Threshold (in %)", min_value=50, max_value=100, value=60, step=5)
-
-    # Step 4: Button to Process Matching
+    # ------------------------
+    # PROCESS MATCHING
+    # ------------------------
     if st.button("Let's Go!"):
-        start_time = time.time()
-        st.info("Processing data... This may take a while.")
-        progress_bar = st.progress(0)
+        start = time.time()
+        st.info("Processing... please wait.")
 
-        # Step 5: Apply Partial Match First if Prioritized
-        def get_partial_match_url(origin_url):
-            highest_score = 0
-            best_match = '/'
-            for destination_url in destination_df['Address']:
-                if isinstance(origin_url, str) and isinstance(destination_url, str):
-                    score = SequenceMatcher(None, origin_url.lower(), destination_url.lower()).ratio() * 100
-                    if score > highest_score:
-                        highest_score = score
-                        best_match = destination_url
-            return best_match if highest_score > partial_match_threshold else '/'
+        def partial_match(origin):
+            best_score, best_url = 0, '/'
+            for dest in dest_df['Address']:
+                score = SequenceMatcher(None, origin.lower(), dest.lower()).ratio() * 100
+                if score > best_score:
+                    best_score, best_url = score, dest
+            return best_url if best_score > partial_thresh else '/'
 
-        if prioritize_partial_match:
-            # Process partial matches without threading
-            partial_matches = []
-            for origin_url in origin_df['Address']:
-                partial_matches.append(get_partial_match_url(origin_url))
+        matches = []
+        for i, row in origin_df.iterrows():
+            origin_url = row['Address']
+            match_url, method = '/', 'Unmatched'
 
-            # Apply partial matches before calculating similarity scores
-            matches_df = pd.DataFrame({
-                'origin_url': origin_df['Address'],
-                'matched_url': partial_matches,
-                'similarity_score': ['Partial Match'] * len(origin_df),
-                'fallback_applied': ['Partial Match'] * len(origin_df)
-            })
-        else:
-            # Initialize matches_df without partial matches
-            matches_df = pd.DataFrame({
-                'origin_url': origin_df['Address'],
-                'matched_url': ['/'] * len(origin_df),
-                'similarity_score': [''] * len(origin_df),
-                'fallback_applied': ['No'] * len(origin_df)
-            })
+            if strategy == 'Partial Match':
+                match_url = partial_match(origin_url)
+                method = 'Partial Match' if match_url != '/' else 'Unmatched'
 
-        # Step 6: Calculate Similarity Scores for URLs that still need it
-        unmatched_indices = matches_df['matched_url'] == '/'
-        if unmatched_indices.any():
-            # Use a pre-trained model for embedding
+            matches.append([origin_url, match_url, method])
+
+        matches_df = pd.DataFrame(matches, columns=['origin_url', 'matched_url', 'method'])
+
+        # SEMANTIC MATCH FOR UNMATCHED
+        if 'Similarity Score' in strategy or (strategy == 'Partial Match' and (matches_df['matched_url'] == '/').any()):
             model = SentenceTransformer('all-MiniLM-L6-v2')
-
-            # Vectorize the combined text
             origin_embeddings = model.encode(origin_df['combined_text'].tolist(), show_progress_bar=True)
-            destination_embeddings = model.encode(destination_df['combined_text'].tolist(), show_progress_bar=True)
+            dest_embeddings = model.encode(dest_df['combined_text'].tolist(), show_progress_bar=True)
 
-            # Create a FAISS index
-            dimension = origin_embeddings.shape[1]
-            faiss_index = faiss.IndexFlatL2(dimension)
-            faiss_index.add(destination_embeddings.astype('float32'))
+            index = faiss.IndexFlatL2(origin_embeddings.shape[1])
+            index.add(dest_embeddings.astype('float32'))
+            D, I = index.search(origin_embeddings.astype('float32'), 1)
 
-            # Perform the search for the nearest neighbors
-            D, I = faiss_index.search(origin_embeddings.astype('float32'), k=1)
+            for idx in matches_df[matches_df['matched_url'] == '/'].index:
+                sim_score = 1 - (D[idx][0] / (np.max(D) + 1e-10))
+                if sim_score * 100 >= sim_thresh:
+                    matches_df.at[idx, 'matched_url'] = dest_df.iloc[I[idx][0]]['Address']
+                    matches_df.at[idx, 'method'] = f"Sim Score: {round(sim_score*100, 2)}%"
 
-            # Calculate similarity scores
-            similarity_scores = 1 - (D / (np.max(D) + 1e-10))  # Add small value to avoid division by zero
+        # FALLBACK MATCHING
+        def apply_fallback(origin_url):
+            origin_url = origin_url.lower().strip().rstrip('/')
+            for _, rule in rules_df.iterrows():
+                if re.search(re.escape(rule['Keyword'].lower().strip()), origin_url):
+                    for pattern in rule['Destination URL Pattern'].split('|'):
+                        if pattern.strip() in dest_df['Address'].values:
+                            return pattern.strip()
+            return '/'
 
-            # Update the DataFrame with similarity scores for unmatched URLs
-            matches_df.loc[unmatched_indices, 'matched_url'] = destination_df.iloc[I[unmatched_indices].flatten()]['Address'].values
-            matches_df.loc[unmatched_indices, 'similarity_score'] = np.round(similarity_scores[unmatched_indices].flatten() * 100, 2)
-            matches_df.loc[unmatched_indices, 'fallback_applied'] = 'No'
+        for idx in matches_df[matches_df['matched_url'] == '/'].index:
+            fallback_url = apply_fallback(matches_df.at[idx, 'origin_url'])
+            matches_df.at[idx, 'matched_url'] = fallback_url
+            matches_df.at[idx, 'method'] = 'Fallback Rule'
 
-        # Step 7: Apply Fallbacks for Remaining Low Scores
-        low_score_indices = matches_df['similarity_score'].apply(lambda x: isinstance(x, float) and x < similarity_score_threshold)
+        # FORCE HOMEPAGE FOR HOMEPAGE
+        homepage_variants = ['/', 'index.html', 'index.php']
+        matches_df.loc[matches_df['origin_url'].str.lower().isin(homepage_variants), ['matched_url', 'method']] = ['/', 'Homepage']
 
-        def get_fallback_url(origin_url):
-            fallback_url = "/"  # Default fallback to homepage
-            origin_url_normalized = origin_url.lower().strip().rstrip('/') if isinstance(origin_url, str) else ''
-            
-            # Apply CSV rules
-            applicable_rules = rules_df.sort_values(by='Priority')  # Sort rules by priority
-            for _, rule in applicable_rules.iterrows():
-                keyword_normalized = rule['Keyword'].lower().strip().rstrip('/')
-                if re.search(re.escape(keyword_normalized), origin_url_normalized):  # Flexible matching
-                    destination_patterns = rule['Destination URL Pattern'].split('|')
-                    for pattern in destination_patterns:
-                        cleaned_pattern = pattern.strip()
-                        if cleaned_pattern in destination_df['Address'].values:
-                            return cleaned_pattern
-            
-            return fallback_url
-        
-        matches_df.loc[low_score_indices, 'matched_url'] = matches_df['origin_url'].apply(get_fallback_url)
-        matches_df.loc[low_score_indices, 'similarity_score'] = 'Fallback'
-        matches_df.loc[low_score_indices, 'fallback_applied'] = 'Yes'
+        # ------------------------
+        # DISPLAY RESULTS
+        # ------------------------
+        elapsed = time.time() - start
+        st.success(f"✅ Matching complete in {elapsed:.2f} seconds for {len(matches_df)} URLs.")
+        st.dataframe(matches_df)
 
-        # Step 8: Final Check for Homepage Redirection
-        homepage_indices = matches_df['origin_url'].str.lower().str.strip().isin(['/', 'index.html', 'index.php', 'index.asp'])
-        matches_df.loc[homepage_indices, 'matched_url'] = '/'
-        matches_df.loc[homepage_indices, 'similarity_score'] = 'Homepage'
-        matches_df.loc[homepage_indices, 'fallback_applied'] = 'Last Resort'
-
-        # Step 9: Display and Download Results
-        end_time = time.time()
-        total_time = end_time - start_time
-        avg_time_per_url = total_time / len(origin_df)
-
-        st.success(f"Matching complete in {total_time:.2f} seconds! Average processing time per URL: {avg_time_per_url:.2f} seconds. Total URLs processed: {len(origin_df)}.")
-        st.write(matches_df)
-
-        st.download_button(
-            label="Download Results as CSV",
-            data=matches_df.to_csv(index=False),
-            file_name="redirect_mapping_output_v5.csv",
-            mime="text/csv",
-        )
+        st.download_button("⬇️ Download Mapped Redirects", data=matches_df.to_csv(index=False),
+                           file_name="redirect_mapping_output_v5.1.csv", mime="text/csv")
