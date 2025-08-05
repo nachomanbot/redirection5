@@ -53,6 +53,7 @@ if not os.path.exists(rules_path):
     st.stop()
 
 rules_df = pd.read_csv(rules_path, encoding="ISO-8859-1")
+rules_df.columns = rules_df.columns.str.strip()
 if 'Destination URL Pattern' not in rules_df.columns or 'Keyword' not in rules_df.columns:
     st.error("'rules.csv' must contain 'Keyword' and 'Destination URL Pattern' columns.")
     st.stop()
@@ -134,7 +135,7 @@ if origin_file and dest_file:
 
         # FALLBACK MATCHING
         def apply_fallback(origin_url):
-            origin_url = origin_url.lower().strip().rstrip('/')
+            origin_url = str(origin_url).lower().strip().rstrip('/')
             for _, rule in rules_df.iterrows():
                 keyword = str(rule.get('Keyword', '')).lower().strip()
                 destination_pattern = str(rule.get('Destination URL Pattern', '')).strip()
