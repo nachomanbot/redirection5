@@ -52,7 +52,12 @@ if not os.path.exists(rules_path):
     st.error("Rules file (rules.csv) not found in the backend.")
     st.stop()
 
-rules_df = pd.read_csv(rules_path, encoding="ISO-8859-1").sort_values(by='Priority')
+rules_df = pd.read_csv(rules_path, encoding="ISO-8859-1")
+if 'Destination URL Pattern' not in rules_df.columns or 'Keyword' not in rules_df.columns:
+    st.error("'rules.csv' must contain 'Keyword' and 'Destination URL Pattern' columns.")
+    st.stop()
+
+rules_df = rules_df.sort_values(by='Priority')
 
 # ------------------------
 # LOAD & CLEAN DATA
@@ -131,10 +136,13 @@ if origin_file and dest_file:
         def apply_fallback(origin_url):
             origin_url = origin_url.lower().strip().rstrip('/')
             for _, rule in rules_df.iterrows():
-                if re.search(re.escape(rule['Keyword'].lower().strip()), origin_url):
-                    for pattern in rule['Destination URL Pattern'].split('|'):
-                        if pattern.strip() in dest_df['Address'].values:
-                            return pattern.strip()
+                keyword = str(rule.get('Keyword', '')).lower().strip()
+                destination_pattern = str(rule.get('Destination URL Pattern', '')).strip()
+                if keyword and re.search(re.escape(keyword), origin_url):
+                    for pattern in destination_pattern.split('|'):
+                        cleaned_pattern = pattern.strip()
+                        if cleaned_pattern in dest_df['Address'].values:
+                            return cleaned_pattern
             return '/'
 
         for idx in matches_df[matches_df['matched_url'] == '/'].index:
